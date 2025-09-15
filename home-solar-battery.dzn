@@ -4,9 +4,23 @@ start_hour_of_day = 12;  % t=1 is 12:00 (noon) today
 
 % ---- Forecasts from now .. now+36h ----
 solar_gen_kw = [1.8,1.68,1.44,1.05,0.66,0.36,0.15,0.06,0,0,0,0, 0,0,0,0,0,0,0,0,0.07,0.21,0.42,0.56,0.7,0.91,1.12,2.61,3.96,4.1,4.96,2.68,1.225,0.77,0.42,0.175];
-base_load_kw  = [0.95,1.05,1.15,1.35,1.55,1.85,2.15,1.95,1.6,1.3,1.1,1, 0.9,0.95,0.95,1.05,1.15,1.35,1.65,1.65,1.45,1.25,1.05,0.95,0.95,1.05,1.15,1.35,1.55,1.85,2.15,1.95,1.6,1.3,1.1,1];
+
+base_load_kw = [
+  0.95,1.05,1.15,1.35,1.55,1.85, 0.6,0.6, 1.6,1.3,1.1,1.0,
+  0.90,0.95,0.95,1.05,1.15,1.35,1.65,1.65, 0.6,0.6,0.6,0.6,
+  0.95,1.05,1.15,1.35,1.55,1.85,2.15,1.95,1.60,1.30,1.10,1.00
+];  % trimmed to 0.6 kW during loadshedding. Excludes pool pump
+
 price_buy_per_kwh  = [0.25,0.27,0.31,0.35,0.41,0.43,0.48,0.43,0.35,0.31,0.25,0.21,0.21,0.19,0.19,0.21,0.23,0.26,0.31,0.36,0.29,0.25,0.23,0.23,0.25,0.27,0.31,0.35,0.41,0.43,0.48,0.43,0.35,0.31,0.25,0.21];
 price_sell_per_kwh = [ price_buy_per_kwh[t] * 0.20 | t in 1..T ];
+
+% 1 = grid OFF (load shedding)
+grid_outage_on = [
+  % t=1..12  (today 12:00–23:00)
+  1,1,1,1,0,0, 1,1, 0,0,0,0,
+  % t=13..36 (tomorrow 00:00–23:00)
+  0,0,0,0,0,0,0,0,  1,1,1,1,  0,0,0,0,0,0,0,0,0,0,0,0
+];
 
 % ---- Battery & grid limits ----
 batt_capacity_kwh   = 10.0;
@@ -44,3 +58,7 @@ pen_pump_shortage_per_hour     = 10.0;  % only today's shortage is penalized
 cheap_marginal_cost_threshold_per_kwh = 0.30;  % Currency units, calculate eg 30th percentile of day ahead buy price and insert here
 export_surplus_threshold_kw           = 0.10;  % 0.05–0.2 kW (avoid noise)
 pen_advice_discharge_nudge_per_kwh    = 0.02;  % 0.01–0.03 (gently avoids recommending hours when you’re discharging)
+
+% --- Pre-shedding anchor parameters ---
+pre_shed_soc_min_kwh     = 3.0;
+pen_pre_shed_soc_per_kwh = 0.30;  % This should be similar range to cheap electricity, like cheap_marginal_cost_threshold_per_kwh

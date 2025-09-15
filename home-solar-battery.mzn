@@ -25,6 +25,7 @@ array[H] of float: solar_gen_kw;        % PV generation (kW)
 array[H] of float: base_load_kw;        % house base load, excludes controllables (kW)
 array[H] of float: price_buy_per_kwh;   % import price (currency/kWh)
 array[H] of float: price_sell_per_kwh;  % feed-in tariff (currency/kWh)
+array[H] of int: grid_outage_on;        % 1 = grid OFF, 0 = normal
 
 % Battery & grid
 float: batt_capacity_kwh;               % battery capacity (kWh)
@@ -61,6 +62,13 @@ int:   pump_window_end_hod;             % latest end (20:00 exclusive)
 int:   pump_hours_done_today;           % hours already run today before t=1
 float: pen_pump_shortage_per_hour;      % penalty for unmet hours today
 
+% Pre load-shedding anchor
+float: pre_shed_soc_min_kwh;            % e.g., 3.0
+float: pen_pre_shed_soc_per_kwh;        % e.g., 0.05 (gentle nudge)
+
+% Cap for pv_used_kw domain = max PV seen in the horizon
+float: pv_used_cap_kw = max([ solar_gen_kw[t] | t in H ]);
+
 % --------- Decision variables ----------
 array[H] of var 0.0..grid_import_max_kw: grid_import_kw;
 array[H] of var 0.0..grid_export_max_kw: grid_export_kw;
@@ -74,12 +82,16 @@ array[H] of var 0..1: is_discharging;
 % Pool pump on/off
 array[H] of var 0..1: pump_is_on;
 
+% PV actually taken onto the AC bus (kW). The remainder is spilled.
+array[H] of var 0.0..pv_used_cap_kw: pv_used_kw;
+
 % Terminal SOC band slacks (tight bounds = capacity)
 var 0.0..batt_capacity_kwh: terminal_soc_shortfall_kwh;   % below soc_target_min_kwh
 var 0.0..batt_capacity_kwh: terminal_soc_excess_kwh;      % above soc_target_max_kwh
 
 % Mode switching helper: |is_discharging[t] - is_discharging[t-1]|
 array[2..T] of var 0.0..1.0: mode_change;
+
 
 % --------- Pump window & daily requirement ----------
 int: ND = 1 + (T - 1) div 24;
@@ -141,9 +153,22 @@ constraint forall(t in H)(
   + pump_power_kw * pump_is_on[t]
   + batt_charge_kw[t]/eff_charge
   + grid_export_kw[t]
-  = solar_gen_kw[t]
+  =
+  pv_used_kw[t]
   + batt_discharge_kw[t]*eff_discharge
   + grid_import_kw[t]
+);
+
+% You cannot use more PV than is available
+constraint forall(t in H)( pv_used_kw[t] <= solar_gen_kw[t] );
+
+% Grid OFF during load shedding: no import/export; pump forced OFF
+constraint forall(t in H)(
+  if grid_outage_on[t] = 1 then
+    grid_import_kw[t] = 0 /\
+    grid_export_kw[t] = 0 /\
+    pump_is_on[t]     = 0
+  else true endif
 );
 
 % SOC dynamics (kWh)
@@ -167,6 +192,21 @@ constraint forall(t in H)(
 % Terminal SOC soft band
 constraint soc_kwh[T] + terminal_soc_shortfall_kwh >= soc_target_min_kwh;
 constraint soc_kwh[T] - terminal_soc_excess_kwh  <= soc_target_max_kwh;
+
+% --- Pre-shedding anchor (simple): arrive at outage starts with >= pre_shed_soc_min_kwh ---
+% Applied at the hour BEFORE each outage starts
+% If an outage ever starts at t=1, it falls back to checking soc_kwh[1]
+array[H] of var 0.0..batt_capacity_kwh: pre_shed_shortfall_kwh;  % kWh below target
+
+function int: prev(int: t) = if t > 1 then t - 1 else 1 endif;  % check end of previous hour if there is one
+
+constraint forall(t in H)(
+  if grid_outage_on[t] = 1 /\ (t = 1 \/ grid_outage_on[t-1] = 0) then
+    soc_kwh[prev(t)] + pre_shed_shortfall_kwh[t] >= pre_shed_soc_min_kwh
+  else
+    pre_shed_shortfall_kwh[t] = 0
+  endif
+);
 
 % Mode change linearization
 constraint forall(t in 2..T)(
@@ -206,6 +246,10 @@ array[H] of var float: batt_power_ac_kw =
 array[H] of var float: net_grid_kw =
   [ grid_import_kw[t] - grid_export_kw[t] | t in H ];
 
+% PV not used (spilled/throttled). For reporting/plots only.
+array[H] of var float: pv_spill_kw =
+  [ solar_gen_kw[t] - pv_used_kw[t] | t in H ];
+
 % --------- Objective ----------
 var float: cost_energy_currency =
   sum(t in H)(
@@ -226,9 +270,13 @@ var float: cost_terminal_soc_currency =
 var float: cost_pump_shortage_currency =
   pen_pump_shortage_per_hour * pump_short_hours[0];     % penalize *today* only
 
+var float: cost_pre_shed_soc_currency =
+  pen_pre_shed_soc_per_kwh * sum(t in H)( pre_shed_shortfall_kwh[t] );
+
 var float: cost_total_currency =
   cost_energy_currency + cost_batt_wear_currency + cost_mode_switch_currency
-  + cost_terminal_soc_currency + cost_pump_shortage_currency;
+  + cost_terminal_soc_currency + cost_pump_shortage_currency
+  + cost_pre_shed_soc_currency;
 
 solve minimize cost_total_currency;
 
@@ -243,14 +291,17 @@ output [
   "cost_mode_switch = ", show(cost_mode_switch_currency), "\n",
   "cost_terminal_soc = ", show(cost_terminal_soc_currency), "\n",
   "cost_pump_shortage = ", show(cost_pump_shortage_currency), "\n",
-
+  "cost_pre_shed_soc_currency = ", show(cost_pre_shed_soc_currency), "\n",
+  "All values at end of the hour:\n",
   "grid_import_kw = ", show(grid_import_kw), "\n",
   "grid_export_kw = ", show(grid_export_kw), "\n",
   "batt_charge_kw = ", show(batt_charge_kw), "\n",
   "batt_discharge_kw = ", show(batt_discharge_kw), "\n",
   "batt_power_ac_kw = ", show(batt_power_ac_kw), "\n",
-  "soc_kwh = ", show(soc_kwh), "\n",
+  "soc_kwh = ", show(soc_kwh), "\n",  
   "is_discharging = ", show(is_discharging), "\n",
+  "pv_used_kw = ", show(pv_used_kw), "\n",
+  "pv_spill_kw = ", show(pv_spill_kw), "\n",
   "pump_is_on = ", show(pump_is_on), "\n",
   "mode_change = ", show([ mode_change[t] | t in 2..T ]), "\n",
   "advise_discretionary_on = ", show(advise_discretionary_on), "\n",
