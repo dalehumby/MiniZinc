@@ -236,11 +236,8 @@ constraint forall(t in H)(
   )
 );
 
-array[H] of var float: advice_score_unitless =
-  [ -marginal_energy_cost_per_kwh[t] | t in H ];       % higher = better
-
 % --------- Derived (for debugging/actuation) ----------
-array[H] of var float: batt_power_ac_kw =
+array[H] of var float: batt_to_ac_kw =
   [ eff_discharge * batt_discharge_kw[t] - batt_charge_kw[t]/eff_charge | t in H ];
 
 array[H] of var float: net_grid_kw =
@@ -297,7 +294,7 @@ output [
   "grid_export_kw = ", show(grid_export_kw), "\n",
   "batt_charge_kw = ", show(batt_charge_kw), "\n",
   "batt_discharge_kw = ", show(batt_discharge_kw), "\n",
-  "batt_power_ac_kw = ", show(batt_power_ac_kw), "\n",
+  "batt_to_ac_kw = ", show(batt_to_ac_kw), "\n",
   "soc_kwh = ", show(soc_kwh), "\n",  
   "is_discharging = ", show(is_discharging), "\n",
   "pv_used_kw = ", show(pv_used_kw), "\n",
@@ -305,7 +302,7 @@ output [
   "pump_is_on = ", show(pump_is_on), "\n",
   "mode_change = ", show([ mode_change[t] | t in 2..T ]), "\n",
   "advise_discretionary_on = ", show(advise_discretionary_on), "\n",
-  "advice_score = ", show(advice_score_unitless), "\n",
+  "marginal_energy_cost_per_kwh = ", show(marginal_energy_cost_per_kwh), "\n",
   "terminal_soc@t=36 = {below_target_min_kwh=", show(terminal_soc_shortfall_kwh),
   ", above_target_max_kwh=", show(terminal_soc_excess_kwh), "}\n"
 ];
